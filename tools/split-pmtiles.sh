@@ -32,10 +32,15 @@
 # it and records it in the manifest header.
 #
 # Usage:
-#   tools/split-pmtiles.sh <source.pmtiles> <dest-dir>
+#   tools/split-pmtiles.sh [-n|--dry-run] <source.pmtiles> <dest-dir>
 #
 # Example:
 #   tools/split-pmtiles.sh /srv/tiles/planet.pmtiles /media/user/CARDPUTER
+#
+# --dry-run checks the source, the destination and the free space, prints the chunk
+# plan, and stops before writing anything. Worth running first: the real copy takes
+# tens of minutes, and this is how you find out up front how many chunks there will
+# be and whether the card has room.
 #
 # Environment overrides:
 #   BASE=map.pmtiles   output basename; the firmware opens /map.pmtiles.000
@@ -51,13 +56,22 @@ CHUNK_BITS="${CHUNK_BITS:-31}"
 VERIFY="${VERIFY:-1}"
 
 usage() {
-  sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+  # Print the header comment block: line 2 onwards, stopping at the first line that
+  # is not a comment. Derived rather than hardcoded so --help cannot drift out of
+  # sync with the comments above as they are edited.
+  awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
   exit "${1:-1}"
 }
 
-case "${1:-}" in
-  -h|--help) usage 0 ;;
-esac
+DRY=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)    usage 0 ;;
+    -n|--dry-run) DRY=1; shift ;;
+    -*)           echo "error: unknown option: $1" >&2; exit 1 ;;
+    *)            break ;;
+  esac
+done
 [ "$#" -eq 2 ] || { echo "error: expected 2 arguments, got $#" >&2; echo >&2; usage 1; }
 
 SRC="$1"
@@ -116,6 +130,16 @@ if [ $(( AVAIL + HAVE )) -lt "$SIZE" ]; then
 fi
 printf '  %s bytes free (%s MiB), %s bytes already written\n' \
   "$AVAIL" "$(( AVAIL / 1048576 ))" "$HAVE"
+
+if [ "$DRY" = "1" ]; then
+  echo "== plan (dry run) =="
+  LAST=$(( SIZE - (N - 1) * CHUNK ))
+  printf '  %s.000 .. %s.%03d\n' "$BASE" "$BASE" "$(( N - 1 ))"
+  printf '  %s chunks of %s bytes, last one %s bytes\n' "$(( N - 1 ))" "$CHUNK" "$LAST"
+  printf '  %s bytes total, %s bytes free at the destination\n' "$SIZE" "$AVAIL"
+  echo "  nothing was written; rerun without --dry-run to copy"
+  exit 0
+fi
 
 # Manifest header. sha256sum -c ignores lines starting with '#', so recording the
 # numbers the device needs here costs nothing and keeps them next to the data.
@@ -190,9 +214,32 @@ else
   # Read the card back. Writing is not the same as being able to read it again,
   # and this is the only step that would catch a bad card or a truncated flush.
   echo "== verify =="
-  ( cd "$DST" && sha256sum -c "$(basename "$MAN")" ) \
-    || { echo "error: readback verification failed" >&2; exit 1; }
-  echo "  all chunks verified"
+  VLOG=$(mktemp)
+  trap 'rm -f "$VLOG"' EXIT
+  if ( cd "$DST" && sha256sum -c "$(basename "$MAN")" ) | tee "$VLOG"; then
+    echo "  all chunks verified"
+  else
+    # **Chunks that fail here are deleted, together with their manifest lines.**
+    # The resume check accepts any chunk whose size is right and whose name is in
+    # the manifest, so a chunk that is the correct length but the wrong content
+    # would be skipped by every later run and never repaired. Removing it is what
+    # makes a rerun fix the card. The source file is never touched, so the only
+    # thing discarded is data already proven wrong.
+    BAD=$(sed -n 's/: FAILED.*$//p' "$VLOG" || true)
+    n=0
+    for name in $BAD; do
+      rm -f "$DST/$name"
+      if grep -q "  $name\$" "$MAN"; then
+        grep -v "  $name\$" "$MAN" > "$MAN.new" && mv -f "$MAN.new" "$MAN"
+      fi
+      echo "  removed $name so a rerun rewrites it" >&2
+      n=$(( n + 1 ))
+    done
+    echo "error: readback verification failed for $n chunk(s)" >&2
+    echo "Rerun this script to rewrite them. If it keeps failing on the same chunk," >&2
+    echo "suspect the card or the reader rather than the source." >&2
+    exit 1
+  fi
 fi
 
 echo "== done =="

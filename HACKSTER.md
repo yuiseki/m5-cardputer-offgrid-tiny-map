@@ -176,19 +176,19 @@ The firmware reads the split planet from the card root and creates its own rende
 
 You need a planet basemap in PMTiles form, built from OpenStreetMap through the OpenMapTiles schema, covering zoom 0 through 14. It is about 78 GiB. Obtain or build it according to that project's instructions and licensing; this repository does not redistribute the data.
 
-Then split it into 2 GiB pieces for FAT32. This command and its round trip are verified: `split` produces `.000`, `.001`, and so on, and concatenating the pieces reproduces the original byte for byte.
+Then split it into 2 GiB pieces for FAT32. The repository has a helper for this, `tools/split-pmtiles.sh`, which splits with `dd`, is resumable if the copy is interrupted, and verifies every chunk against a sha256 manifest by reading the card back.
+
+```sh
+tools/split-pmtiles.sh planet.pmtiles /path/to/sd
+```
+
+Add `-n` to see the plan without writing. Plain `split` also works if you prefer to do it by hand, but without the resume and readback checks:
 
 ```sh
 split -b 2147483648 -d -a 3 planet.pmtiles /path/to/sd/map.pmtiles.
 ```
 
-To check the result, concatenating the pieces must equal the source:
-
-```sh
-cat /path/to/sd/map.pmtiles.* | cmp - planet.pmtiles && echo OK
-```
-
-On Windows the `split` and `cat` steps differ and I have not verified them; use a Unix like environment or adapt accordingly. TODO: NEEDS VERIFICATION for a Windows native workflow.
+On Windows both approaches differ and I have not verified them; use a Unix like environment or adapt accordingly.
 
 ## Attribution and license
 

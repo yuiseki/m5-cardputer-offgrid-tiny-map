@@ -97,18 +97,25 @@ OpenMapTiles schema, covering zoom 0 through 14. It is about 78 GiB. Obtain or
 build it according to that project's instructions and licensing; this repository
 does not redistribute the data.
 
-FAT32 cannot hold a single file of 4 GiB or more, so split the archive into
+FAT32 cannot hold a single file of 4 GiB or more, so the archive is split into
 2 GiB pieces named `map.pmtiles.000`, `map.pmtiles.001`, and so on. The firmware
 reads the pieces as one continuous stream.
 
+Use the helper script. It splits with `dd`, checks the PMTiles magic and free
+space first, is resumable if the copy is interrupted, and verifies every chunk
+against a sha256 manifest by reading the card back:
+
 ```sh
-split -b 2147483648 -d -a 3 planet.pmtiles /path/to/sd/map.pmtiles.
+tools/split-pmtiles.sh planet.pmtiles /path/to/sd
 ```
 
-To check the result, concatenating the pieces must equal the source:
+Add `-n` to see the plan (chunk count, free space) without writing anything.
+Copying about 78 GiB over a card reader takes tens of minutes; rerun the script
+to rewrite any chunk that fails verification. If you would rather do it by hand,
+plain `split` also works, but without the resume and readback checks:
 
 ```sh
-cat /path/to/sd/map.pmtiles.* | cmp - planet.pmtiles && echo OK
+split -b 2147483648 -d -a 3 planet.pmtiles /path/to/sd/map.pmtiles.
 ```
 
 The card layout is just the pieces at the root. There are no font files to
