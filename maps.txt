@@ -1,0 +1,45 @@
+# Cardputer Maps: tile sources
+#
+# One URL per line. {z} {x} {y} are substituted. Lines starting with # are comments.
+#
+# The order here is the order shown in :maps. Priority is up to you.
+#
+# HTTPS sources are selectable only with an SD card, because TLS costs about
+# 38 KB of contiguous heap.
+#
+# The name shown in the list is derived from the URL: /styles/<id>/ if present,
+# else the path segment before {z}, else "(no name)".
+#
+# ---- Adding a source --------------------------------------------------------
+# Add one line to this file and send a PR. No C changes are needed:
+# tools/gen-map-defaults.py generates src/map_defaults.h at build time.
+#
+# After adding a line, bump maps-version at the bottom by one. Users who already
+# have a maps.txt on their SD card receive the new entries as appends only,
+# while their own edits are left untouched.
+# -----------------------------------------------------------------------------
+
+# OpenStreetMap Foundation
+https://tile.openstreetmap.org/{z}/{x}/{y}.png
+
+# FOSSGIS e.V. (OSM Germany)
+https://tile.openstreetmap.de/{z}/{x}/{y}.png
+
+# OpenStreetMap France
+https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png
+https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png
+
+# OSM Foundation Japan
+https://tile.openstreetmap.jp/styles/osm-bright/256/{z}/{x}/{y}.png
+https://tile.openstreetmap.jp/styles/osm-bright-ja/256/{z}/{x}/{y}.png
+https://tile.openstreetmap.jp/styles/osm-bright-en/256/{z}/{x}/{y}.png
+https://tile.openstreetmap.jp/styles/maptiler-basic-ja/256/{z}/{x}/{y}.png
+https://tile.openstreetmap.jp/styles/maptiler-basic-en/256/{z}/{x}/{y}.png
+https://tile.openstreetmap.jp/styles/openmaptiles/256/{z}/{x}/{y}.png
+
+# yuiseki (personal). The only source that allows pre-seeding.
+http://tile.yuiseki.net/styles/osm-bright/256/{z}/{x}/{y}.png
+http://tile.yuiseki.net/styles/osm-fiord/256/{z}/{x}/{y}.png
+http://tile.yuiseki.net/styles/osm-carto/256/{z}/{x}/{y}.png
+
+# maps-version: 2

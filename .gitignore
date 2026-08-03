@@ -1,0 +1,31 @@
+# PlatformIO build output
+.pio/
+
+# Build logs
+*.log
+
+# Per-device Wi-Fi credentials (not used by the current build; kept ignored).
+src/wifi_credentials.h
+
+# Built firmware binaries
+firmware/*.bin
+
+# Python
+__pycache__/
+*.pyc
+
+# Working screenshots (only the ones kept under docs/ are tracked)
+shots/
+shots2/
+shots3/
+shots4/
+
+# Local WiGLE working data (may contain BSSIDs and locations). Never track.
+tmp/
+
+# WiGLE API key (plaintext), placed on the device only. Never put it in the repo.
+wigle.txt
+/wigle.txt
+
+# Large real vector tiles used for local tests
+test/tiles/

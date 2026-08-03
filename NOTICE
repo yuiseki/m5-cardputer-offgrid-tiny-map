@@ -1,0 +1,41 @@
+M5Stack Cardputer Offgrid Tiny Map
+Copyright 2026 yuiseki
+
+This product includes software developed by yuiseki.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Map data
+--------------------------------------------------------------------------------
+
+Map data is © OpenStreetMap contributors, available under the Open Database
+License (ODbL) 1.0.
+
+    https://www.openstreetmap.org/copyright
+    https://opendatacommons.org/licenses/odbl/
+
+This application renders that data in two ways. Offline, it draws vector tiles
+from a PMTiles archive (built through the OpenMapTiles schema) that the user
+supplies on the SD card. Online, it can fetch raster tiles from third-party
+services. In neither case is map data redistributed with this software.
+
+Tile schema: OpenMapTiles. Tile archive format: PMTiles.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+The ESPREC1 wire format used for screen capture is from tig/esprec, licensed
+under the Apache License, Version 2.0. The on-device implementation in this
+repository was written independently against that format.
+
+    https://github.com/tig/esprec
+
+Built against the following libraries, which are not included in this
+repository but are linked at build time (licenses verified 2026-07-31 in
+.pio/libdeps):
+
+    M5Unified      MIT
+    M5GFX          MIT
+    M5Cardputer    (no LICENSE file in the distributed package)
+    IRremote       MIT
