@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 
 // A minimal writer that produces PNG(RGB) without zlib (uncompressed deflate)
@@ -59,6 +60,13 @@ static void writePng(const char *path, const uint16_t *fb, int w, int h) {
   be32(z + zo, adler(raw, raw_n)); zo += 4;
 
   FILE *f = fopen(path, "wb");
+  if (!f) {
+    // Was unchecked, and the next fwrite dereferenced null: with the fixture in
+    // place but shots/ absent, the whole test segfaulted before asserting
+    // anything. A missing output directory should cost the picture, not the run.
+    printf("WARN  cannot write %s (%s); skipping the dump\n", path, strerror(errno));
+    return;
+  }
   const uint8_t sig[8] = {137,80,78,71,13,10,26,10};
   fwrite(sig, 1, 8, f);
   auto chunk = [&](const char *type, const uint8_t *data, size_t n) {

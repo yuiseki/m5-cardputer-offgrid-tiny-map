@@ -29,3 +29,4 @@ wigle.txt
 
 # Large real vector tiles used for local tests
 test/tiles/
+shots/

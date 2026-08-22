@@ -7,6 +7,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 out=$(mktemp -d)
+# test_vtrender dumps a PNG here for visual inspection. Created up front because
+# the test treats a missing directory as "no picture this time" rather than as a
+# failure, and a run with no picture is harder to review than one with.
+mkdir -p shots
 trap 'rm -rf "$out"' EXIT
 fail=0
 for t in test/test_*.cpp; do
