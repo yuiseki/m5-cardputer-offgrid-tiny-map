@@ -32,10 +32,15 @@
 # it and records it in the manifest header.
 #
 # Usage:
-#   tools/split-pmtiles.sh [-n|--dry-run] <source.pmtiles> <dest-dir>
+#   tools/split-pmtiles.sh [-n|--dry-run] [source.pmtiles] <dest-dir>
 #
 # Example:
 #   tools/split-pmtiles.sh /srv/tiles/planet.pmtiles /media/user/CARDPUTER
+#   PMTILES=/srv/tiles/planet.pmtiles tools/split-pmtiles.sh /media/user/CARDPUTER
+#
+# The source may come from $PMTILES instead of the first argument, which keeps the
+# path out of shell history and out of every invocation when the same archive is
+# written to several cards.
 #
 # --dry-run checks the source, the destination and the free space, prints the chunk
 # plan, and stops before writing anything. Worth running first: the real copy takes
@@ -43,6 +48,7 @@
 # be and whether the card has room.
 #
 # Environment overrides:
+#   PMTILES=           source archive, used when the first argument is omitted
 #   BASE=map.pmtiles   output basename; the firmware opens /map.pmtiles.000
 #   CHUNK_BITS=31      power-of-two chunk size; must match src/chunk_map.h
 #   VERIFY=1           set to 0 to skip the readback pass (not recommended)
@@ -51,6 +57,7 @@
 
 set -euo pipefail
 
+PMTILES="${PMTILES:-}"
 BASE="${BASE:-map.pmtiles}"
 CHUNK_BITS="${CHUNK_BITS:-31}"
 VERIFY="${VERIFY:-1}"
@@ -72,7 +79,18 @@ while [ "$#" -gt 0 ]; do
     *)            break ;;
   esac
 done
-[ "$#" -eq 2 ] || { echo "error: expected 2 arguments, got $#" >&2; echo >&2; usage 1; }
+# One argument means the source comes from $PMTILES; two means it is explicit. An
+# explicit argument wins, so a script that exports PMTILES globally can still be
+# overridden for one card without unsetting anything.
+if [ "$#" -eq 1 ] && [ -n "$PMTILES" ]; then
+  set -- "$PMTILES" "$1"
+fi
+if [ "$#" -eq 1 ]; then
+  echo "error: no source given and PMTILES is not set" >&2
+  echo >&2
+  usage 1
+fi
+[ "$#" -eq 2 ] || { echo "error: expected 1 or 2 arguments, got $#" >&2; echo >&2; usage 1; }
 
 SRC="$1"
 DST="${2%/}"

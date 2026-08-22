@@ -34,7 +34,7 @@ bugs that only appeared at planet scale, see [HACKSTER.md](HACKSTER.md).
 
 * M5Stack Cardputer (M5Stamp S3A, an ESP32-S3, with **no PSRAM**).
 * A 240 x 135 LCD and a built in keyboard.
-* A microSD card, formatted FAT32. 128 GB holds the full planet.
+* A microSD card, formatted FAT32 (see [Formatting the card](#formatting-the-card)). 128 GB holds the full planet.
 * A Cap LoRa-1262 module carrying an ATGM336H GNSS receiver, for position.
 
 The map itself needs only the Cardputer and a card. GPS needs the LoRa cap.
@@ -90,6 +90,30 @@ Host side tests run with an ordinary compiler, no board required:
 
 ## Preparing the microSD
 
+### Formatting the card
+
+The card must be FAT32. That is not a preference: the Arduino SD library mounts
+FAT12/16/32 only, and the raster tile path hands `fs::File` to
+`M5.Display.drawPng()`, so exFAT would drag the firmware along with it. Cards
+above 32 GB ship exFAT from the factory, so a 128 GB card almost always has to be
+reformatted before it can be used here.
+
+```sh
+tools/format-sd-card.sh -n /dev/sdX          # inspect, change nothing
+sudo tools/format-sd-card.sh --expect-size 127831375872 /dev/sdX
+```
+
+Run the dry run first. It prints the model, serial, size and current contents of
+the device, and the size it reports is what goes into `--expect-size`; that round
+trip is the confirmation. The script refuses a device the kernel does not report
+as removable, refuses one holding a mounted filesystem unless given `--unmount`,
+and refuses to erase anything without `--expect-size`. A device letter is not a
+stable name, and `/dev/sdb` can be a card reader one hour and a backup disk the
+next.
+
+Linux only. On macOS use Disk Utility, or `diskutil eraseDisk FAT32 CARDPUTER
+/dev/diskN`, then carry on below.
+
 ### Offline vector map (planet.pmtiles)
 
 You need a planet basemap in PMTiles form, built from OpenStreetMap through the
@@ -107,6 +131,14 @@ against a sha256 manifest by reading the card back:
 
 ```sh
 tools/split-pmtiles.sh planet.pmtiles /path/to/sd
+```
+
+The source can come from `$PMTILES` instead of the first argument, which keeps the
+path out of every invocation when the same archive goes onto several cards:
+
+```sh
+export PMTILES=/srv/tiles/planet.pmtiles
+tools/split-pmtiles.sh /path/to/sd
 ```
 
 Add `-n` to see the plan (chunk count, free space) without writing anything.
