@@ -176,6 +176,45 @@ int main() {
       printf("  [info] single pass matches per-layer output, %ld of %ld px painted\n", painted, (long)W * H);
   }
 
+
+  // ---- plane-only rendering must produce the same plane as a full render --------
+  //
+  // The colour buffer is optional when a plane is set. That is only safe if
+  // dropping it changes nothing about which layer wins each pixel, so render both
+  // ways and compare the planes rather than trusting the reasoning.
+  {
+    static const char *const kLayers[] = {"landcover", "landuse",  "park",           "water",
+                                          "waterway",  "building", "transportation"};
+    const int nLayers = (int)(sizeof(kLayers) / sizeof(kLayers[0]));
+    static uint16_t fbC[W * H];
+    static uint8_t planeWith[W * H];
+    static uint8_t planeWithout[W * H];
+    memset(planeWith, 0, sizeof(planeWith));
+    memset(planeWithout, 0, sizeof(planeWithout));
+
+    VtRender rc(fbC, W, H);
+    rc.setPriorityPlane(planeWith);
+    rc.clear(VtRender::background());
+    MemSource s1(buf, sz);
+    rc.renderLayers(s1, kLayers, nLayers);
+
+    VtRender rp(nullptr, W, H);
+    rp.setPriorityPlane(planeWithout);
+    rp.clear(VtRender::background());          // must be a no-op, not a crash
+    MemSource s2(buf, sz);
+    rp.renderLayers(s2, kLayers, nLayers);
+
+    long diff = 0;
+    for (long i = 0; i < (long)W * H; i++)
+      if (planeWith[i] != planeWithout[i]) diff++;
+    if (diff) {
+      printf("  NG plane-only differs in %ld of %ld pixels\n", diff, (long)W * H);
+      singlePassBad = 1;
+    } else {
+      printf("  [info] plane-only rendering matches\n");
+    }
+  }
+
   printf("PASS  crc=0x%08X water=%d building=%d px  -> shots/vt-host.png\n", crc, water, building);
   free(buf);
   return (water > 0 && building > 0 && !singlePassBad) ? 0 : 1;

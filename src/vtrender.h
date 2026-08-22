@@ -17,6 +17,10 @@ static inline uint16_t vtRgb(uint8_t r, uint8_t g, uint8_t b) {
 
 class VtRender {
  public:
+  // fb may be null when a priority plane is set and only the plane is wanted. See
+  // setPriorityPlane: a caller that decides what a pixel is by which layer drew it
+  // has no use for the colour, and skipping the colour buffer halves the memory a
+  // strip costs and removes a write per pixel.
   VtRender(uint16_t *fb, int w, int h, int extent = 4096);
 
   void clear(uint16_t color);

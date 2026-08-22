@@ -19,6 +19,7 @@ void VtRender::setView(int ox, int oy, int pxPerTile, int extent) {
 }
 
 void VtRender::clear(uint16_t color) {
+  if (!fb_) return;                                // plane-only rendering
   for (int i = 0; i < w_ * h_; i++) fb_[i] = color;
 }
 
@@ -33,7 +34,11 @@ static inline void putpx(uint16_t *fb, int w, int h, int x, int y, uint16_t c,
     if (p < prio[i]) return;
     prio[i] = p;
   }
-  fb[i] = c;
+  // fb may be null when only the plane is wanted. A caller that classifies pixels
+  // by layer rather than by colour has no use for the colour buffer, and on a
+  // device where memory decides how many strips a frame takes, two bytes per pixel
+  // is the difference between two strips and four.
+  if (fb) fb[i] = c;
 }
 
 static void drawLine(uint16_t *fb, int w, int h, uint8_t *prio, uint8_t pr, int x0, int y0, int x1, int y1,
