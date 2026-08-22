@@ -22,12 +22,21 @@ void VtRender::clear(uint16_t color) {
   for (int i = 0; i < w_ * h_; i++) fb_[i] = color;
 }
 
-static inline void putpx(uint16_t *fb, int w, int h, int x, int y, uint16_t c) {
+// The plane is optional. With it, a pixel is only overwritten by something of equal
+// or higher priority, so the order features arrive in stops mattering; without it
+// the write is unconditional, which is the original behaviour.
+static inline void putpx(uint16_t *fb, int w, int h, int x, int y, uint16_t c,
+                         uint8_t *prio, uint8_t p) {
   if (x < 0 || y < 0 || x >= w || y >= h) return;
-  fb[y * w + x] = c;
+  const int i = y * w + x;
+  if (prio) {
+    if (p < prio[i]) return;
+    prio[i] = p;
+  }
+  fb[i] = c;
 }
 
-static void drawLine(uint16_t *fb, int w, int h, int x0, int y0, int x1, int y1,
+static void drawLine(uint16_t *fb, int w, int h, uint8_t *prio, uint8_t pr, int x0, int y0, int x1, int y1,
                      uint16_t c, int r) {
   int dx = x1 - x0, dy = y1 - y0;
   dx = dx < 0 ? -dx : dx;
@@ -36,7 +45,7 @@ static void drawLine(uint16_t *fb, int w, int h, int x0, int y0, int x1, int y1,
   int err = dx - dy;
   for (;;) {
     for (int yy = -r; yy <= r; yy++)
-      for (int xx = -r; xx <= r; xx++) putpx(fb, w, h, x0 + xx, y0 + yy, c);
+      for (int xx = -r; xx <= r; xx++) putpx(fb, w, h, x0 + xx, y0 + yy, c, prio, pr);
     if (x0 == x1 && y0 == y1) break;
     int e2 = 2 * err;
     if (e2 > -dy) { err -= dy; x0 += sx; }
@@ -44,7 +53,7 @@ static void drawLine(uint16_t *fb, int w, int h, int x0, int y0, int x1, int y1,
   }
 }
 
-static void fillRing(uint16_t *fb, int w, int h, const int *sx, const int *sy, int n,
+static void fillRing(uint16_t *fb, int w, int h, uint8_t *prio, uint8_t pr, const int *sx, const int *sy, int n,
                      uint16_t c) {
   if (n < 3) return;
   int ymin = sy[0], ymax = sy[0];
@@ -68,7 +77,7 @@ static void fillRing(uint16_t *fb, int w, int h, const int *sx, const int *sy, i
       int x0 = xs[a], x1 = xs[a + 1];
       if (x0 < 0) x0 = 0;
       if (x1 >= w) x1 = w - 1;
-      for (int x = x0; x <= x1; x++) fb[y * w + x] = c;
+      for (int x = x0; x <= x1; x++) putpx(fb, w, h, x, y, c, prio, pr);
     }
   }
 }
@@ -76,7 +85,7 @@ static void fillRing(uint16_t *fb, int w, int h, const int *sx, const int *sy, i
 // **Fills all of a feature's rings together with even-odd (so holes come out correctly).**
 // Filling rings individually makes "a continent (a hole) inside the ocean" get swallowed by the ocean color (z0's Americas disappeared).
 // Even-odd fills only the odd-count interior regardless of winding direction, so it naturally handles holes/nesting.
-static void fillRings(uint16_t *fb, int w, int h, const int16_t *xs, const int16_t *ys,
+static void fillRings(uint16_t *fb, int w, int h, uint8_t *prio, uint8_t pr, const int16_t *xs, const int16_t *ys,
                       const int *ringStart, int nRings, uint16_t c) {
   if (nRings < 1) return;
   const int total = ringStart[nRings];
@@ -103,7 +112,7 @@ static void fillRings(uint16_t *fb, int w, int h, const int16_t *xs, const int16
       int x0 = cross[a], x1 = cross[a + 1];
       if (x0 < 0) x0 = 0;
       if (x1 >= w) x1 = w - 1;
-      for (int x = x0; x <= x1; x++) fb[y * w + x] = c;
+      for (int x = x0; x <= x1; x++) putpx(fb, w, h, x, y, c, prio, pr);
     }
   }
 }
@@ -163,17 +172,39 @@ static int gTmpX[vtile::VTILE_MAX_RING], gTmpY[vtile::VTILE_MAX_RING];
 // A Sink that colors one layer by class
 struct VtSink : vtile::Sink {
   VtRender *r;
-  const char *layer;
+  const char *layer;               // the layer currently being drawn
   FeatStyle cur;
 
-  bool wantLayer(const char *name) override { return !strcmp(name, layer); }
+  // Multi-layer mode: names in paint order, or null for the single-layer case.
+  const char *const *names = nullptr;
+  int nNames = 0;
+
+  int indexOf(const char *name) const {
+    for (int i = 0; i < nNames; i++)
+      if (!strcmp(name, names[i])) return i;
+    return -1;
+  }
+
+  bool wantLayer(const char *name) override {
+    if (!names) return !strcmp(name, layer);
+    return indexOf(name) >= 0;
+  }
+
+  void beginLayer(const char *name, int) override {
+    if (!names) return;
+    layer = name;
+    // Position in the caller's list is the paint order, so it is the priority.
+    // Offset by one so that zero means "nothing drawn here yet".
+    const int i = indexOf(name);
+    r->curPrio_ = (uint8_t)(i + 1);
+  }
   bool wantTags() override { return true; }
 
   // Fills the accumulated polygon (from the previous feature), including its holes, then clears it
   void flushFill() {
     if (gPolyR > 0) {
       gRingStart[gPolyR] = gPolyN;
-      fillRings(r->fb_, r->w_, r->h_, gPx, gPy, gRingStart, gPolyR, cur.color);
+      fillRings(r->fb_, r->w_, r->h_, r->prio_, r->curPrio_, gPx, gPy, gRingStart, gPolyR, cur.color);
     }
     gPolyN = 0; gPolyR = 0;
   }
@@ -195,7 +226,7 @@ struct VtSink : vtile::Sink {
         gTmpY[i] = r->offy_ + (int)(pts[i].y * r->scale_ + 0.5f);
       }
       for (int i = 0; i + 1 < m; i++)
-        drawLine(r->fb_, r->w_, r->h_, gTmpX[i], gTmpY[i], gTmpX[i + 1], gTmpY[i + 1], cur.color, cur.radius);
+        drawLine(r->fb_, r->w_, r->h_, r->prio_, r->curPrio_, gTmpX[i], gTmpY[i], gTmpX[i + 1], gTmpY[i + 1], cur.color, cur.radius);
       return;
     }
     // Accumulates the polygon ring into the feature buffer (filled later together, including holes)
@@ -212,10 +243,30 @@ struct VtSink : vtile::Sink {
         gTmpX[i] = r->offx_ + (int)(pts[i].x * r->scale_ + 0.5f);
         gTmpY[i] = r->offy_ + (int)(pts[i].y * r->scale_ + 0.5f);
       }
-      fillRing(r->fb_, r->w_, r->h_, gTmpX, gTmpY, m, cur.color);
+      fillRing(r->fb_, r->w_, r->h_, r->prio_, r->curPrio_, gTmpX, gTmpY, m, cur.color);
     }
   }
 };
+
+void VtRender::renderLayers(ByteSource &src, const char *const *layerNames, int n) {
+  if (n <= 0) return;
+  if (!prio_) {
+    // Correct but not faster: without a plane, arrival order would decide overlap
+    // and a vector tile stores its layers alphabetically. Falling back keeps the
+    // call valid rather than quietly drawing the wrong thing.
+    for (int i = 0; i < n; i++) renderLayer(src, layerNames[i]);
+    return;
+  }
+  VtSink sink;
+  sink.r = this;
+  sink.names = layerNames;
+  sink.nNames = n;
+  sink.layer = layerNames[0];
+  sink.cur = {vtRgb(0xCC, 0xCC, 0xCC), false, 0};
+  gPolyN = 0; gPolyR = 0;
+  vtile::walk(src, sink);
+  sink.flushFill();
+}
 
 void VtRender::renderLayer(ByteSource &src, const char *layerName) {
   VtSink sink;

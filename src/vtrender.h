@@ -31,6 +31,28 @@ class VtRender {
   // **Draws one layer, colored by the class tag.** Call order is paint order
   void renderLayer(ByteSource &src, const char *layerName);
 
+  // **Draws several layers in a single pass over the tile.** `names` is in paint
+  // order: later entries win where they overlap.
+  //
+  // Why this exists: renderLayer walks the whole tile and lets the sink discard
+  // every layer but one, so eight layers means reading the tile eight times. On a
+  // Cardputer that read comes off a microSD card and dominates the render; a
+  // 160 KB tile at z13 measured 14.5 s for two tiles over two strips, almost all of
+  // it re-reading.
+  //
+  // One pass cannot honour paint order by arrival, because a vector tile stores its
+  // layers alphabetically: measured on a z13 tile of Manhattan the order on disk is
+  // boundary, building, landcover, landuse, park, transportation, water, waterway,
+  // which would paint water over the roads. So a priority plane decides instead,
+  // and setPriorityPlane must be called first. Without one this falls back to
+  // calling renderLayer per name, which is correct but not faster.
+  void renderLayers(ByteSource &src, const char *const *names, int n);
+
+  // One byte per pixel, w*h, owned by the caller and zeroed before each pass. Pass
+  // nullptr to go back to unconditional writes, which is what renderLayer alone
+  // does and what every existing caller gets.
+  void setPriorityPlane(uint8_t *plane) { prio_ = plane; }
+
   // Background color (to pass to clear). Swap is the caller's responsibility
   static uint16_t background() { return vtRgb(0xF2, 0xEF, 0xE9); }
 
@@ -41,5 +63,7 @@ class VtRender {
   int offx_, offy_;
   bool swap_ = false;
   int over_ = 0;
+  uint8_t *prio_ = nullptr;   // optional, w_*h_ bytes; see setPriorityPlane
+  uint8_t curPrio_ = 0;       // priority of the layer being drawn
   friend struct VtSink;
 };

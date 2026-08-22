@@ -123,7 +123,60 @@ int main() {
     if (fb[i] == vtRgb(0x9C, 0xC2, 0xE5)) water++;
     if (fb[i] == vtRgb(0xC8, 0xC0, 0xB8)) building++;
   }
+
+  // ---- renderLayers must agree with renderLayer, pixel for pixel ----------------
+  //
+  // This is the whole contract of the single-pass path: it exists to read the tile
+  // once instead of once per layer, and it is only worth having if the result is
+  // identical. A vector tile stores its layers alphabetically, so arrival order is
+  // not paint order, and the priority plane is what reconciles them. If the plane
+  // is ever wrong the two images diverge, and this is what notices.
+  int singlePassBad = 0;
+  {
+    static const char *const kLayers[] = {"landcover", "landuse",  "park",           "water",
+                                          "waterway",  "building", "transportation"};
+    const int nLayers = (int)(sizeof(kLayers) / sizeof(kLayers[0]));
+
+    static uint16_t fbA[W * H];
+    static uint16_t fbB[W * H];
+    static uint8_t plane[W * H];
+    memset(plane, 0, sizeof(plane));
+
+    // Reference: one walk per layer, in paint order, as callers do today.
+    VtRender ra(fbA, W, H);
+    ra.clear(VtRender::background());
+    MemSource srcA(buf, sz);
+    for (int i = 0; i < nLayers; i++) ra.renderLayer(srcA, kLayers[i]);
+
+    // Under test: one walk for all of them, overlap resolved by the plane.
+    VtRender rb(fbB, W, H);
+    rb.setPriorityPlane(plane);
+    rb.clear(VtRender::background());
+    MemSource srcB(buf, sz);
+    rb.renderLayers(srcB, kLayers, nLayers);
+
+    long diff = 0;
+    for (long i = 0; i < (long)W * H; i++)
+      if (fbA[i] != fbB[i]) diff++;
+
+    long painted = 0;
+    for (long i = 0; i < (long)W * H; i++)
+      if (fbB[i] != VtRender::background()) painted++;
+
+    if (diff) {
+      printf("  NG renderLayers differs in %ld of %ld pixels\n", diff, (long)W * H);
+      singlePassBad = 1;
+    }
+    // "identical" is vacuous if neither drew anything.
+    if (painted < (long)W * H / 100) {
+      printf("  NG single pass painted almost nothing (%ld px)\n", painted);
+      singlePassBad = 1;
+    }
+    if (!singlePassBad)
+      printf("  [info] single pass matches per-layer output, %ld of %ld px painted\n", painted, (long)W * H);
+  }
+
   printf("PASS  crc=0x%08X water=%d building=%d px  -> shots/vt-host.png\n", crc, water, building);
   free(buf);
-  return (water > 0 && building > 0) ? 0 : 1;
+  return (water > 0 && building > 0 && !singlePassBad) ? 0 : 1;
 }
