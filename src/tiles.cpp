@@ -3,6 +3,10 @@
 #include <HTTPClient.h>
 #include <SD.h>
 #include <SPI.h>
+// Both are needed explicitly. The plain client is the non-TLS half of the
+// pair below, and newer Arduino ESP32 cores no longer pull WiFiClient.h in
+// through WiFiClientSecure.h, so relying on that stopped compiling.
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <string.h>
 

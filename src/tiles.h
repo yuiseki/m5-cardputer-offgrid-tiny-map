@@ -8,6 +8,17 @@
 //   - Without SD: HTTP -> RAM -> `drawPng(buf)`. Gives up if a single tile doesn't fit
 #pragma once
 
+// FS.h **before** M5Unified.h, and the order is load-bearing.
+//
+// M5GFX generates its fs::File overloads inside `#if defined (FS_H)`, so
+// whether `drawPng(fs::File*, ...)` exists at all depends on whether Arduino's
+// FS.h has been seen by the time M5GFX is parsed. Including M5Unified.h first
+// leaves it undefined, the overload is never generated, and the call in
+// tiles.cpp fails to compile with "no matching function ... drawPng(fs::File*,
+// int&, int&)" -- an error that points at the call site rather than at the
+// include order that caused it.
+#include <FS.h>
+
 #include <M5Unified.h>
 #include <stddef.h>
 #include <stdint.h>
