@@ -61,7 +61,8 @@
 #include "gps_smooth.h"     // GPS coordinate smoothing (has tests)
 #include "track_log.h"       // GPS logger (CSV/GPX, has tests)
 #include "b64.h"            // base64 and CRC32 for ESPREC1 (has tests)
-#include "power_view.h"     // Battery-level smoothing, voltage trend, labeling (has tests)
+#include "power_view.h"
+#include "screen_sleep.h"     // Battery-level smoothing, voltage trend, labeling (has tests)
 #include "screen_out.h"     // Send the screen over serial (M5SHOT01 / ESPREC1)
 #include "ui_warn.h"        // Warning shown when nothing could be drawn (has tests)
 
@@ -129,6 +130,16 @@ static int VW = 0, VH = 0;
 static bool showInfo = true;          // Placed early since mapH() references it
 static bool vectorMode = false;       // true = render SD's /map.pmtiles as vector tiles (off-grid)
 static uint32_t lastInputMs = 0;      // Time of the most recent key input. Used to debounce vector rendering
+
+// ---- Screen blanking ---------------------------------------------------------
+// The policy lives in screen_sleep.cpp and is tested there; what stays here is
+// the half that needs a panel. Brightness is captured at boot rather than
+// hardcoded, so waking restores what the device actually had rather than what
+// this file guessed.
+static ScreenSleep gScreen;
+static uint8_t gBrightness = 128;
+static void screenOff() { M5.Display.setBrightness(0); }
+static void screenOn()  { M5.Display.setBrightness(gBrightness); }
 // **Screen mode.** Using an enum instead of a row of bools, since bools break down as more modes get added
 enum UiMode : uint8_t { UI_MAP = 0, UI_ABOUT, UI_WIFI_LIST, UI_WIFI_PASS, UI_MAPS };
 static UiMode uiMode = UI_MAP;
@@ -1875,7 +1886,15 @@ static void handleCommand(const char *cmd) {
   }
   if (!strncmp(cmd, "key ", 4)) {
     int fed = 0;
-    for (const char *p = cmd + 4; *p; p++) { handleChar(*p); fed++; }
+    for (const char *p = cmd + 4; *p; p++) {
+      // Through the screen policy as well, so blanking and waking can be driven
+      // from the host like every other binding rather than only by hand.
+      const bool cancel = (*p == '`') && uiMode == UI_MAP && !cmdMode;
+      const ScreenAction a = screenSleepStep(&gScreen, millis(), true, cancel);
+      if (a == SCREEN_SLEEP) { screenOff(); fed++; continue; }
+      if (a == SCREEN_WAKE) { screenOn(); dirty = true; fed++; continue; }
+      handleChar(*p); fed++;
+    }
     // **The content itself is never echoed back.** Calling this while entering a password would leak it over serial
     Serial.printf("ok key %d chars\n", fed);
     return;
@@ -2110,6 +2129,11 @@ void setup() {
   M5Cardputer.begin(cfg, true);
   M5.Display.setRotation(1);
   M5.Display.setTextSize(1);
+  // Capture before anything dims it. A panel reporting 0 here would leave wake
+  // restoring darkness, so keep the fallback.
+  gBrightness = M5.Display.getBrightness();
+  if (!gBrightness) gBrightness = 128;
+  screenSleepInit(&gScreen, SCREEN_SLEEP_MS, millis());
   VW = M5.Display.width();
   VH = M5.Display.height();
 
@@ -2247,7 +2271,25 @@ void loop() {
   // Cancels the z prefix. Prevents a lingering press from swallowing the next key
   if (pendingPrefix && millis() - pendingSince > 2000) pendingPrefix = 0;
 
-  if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+  // Screen blanking is decided before the key is acted on, because a key that
+  // wakes the screen must not also do its normal job -- otherwise the press
+  // that turns the light on has already panned the map by the time you can see
+  // it. `esc` is the cancel key here (it arrives as a backtick), and only on
+  // the map: inside the Wi-Fi and maps screens it still means "go back", so
+  // esc walks you out to the map and one more esc turns the screen off.
+  const bool keyDown =
+      M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed();
+  bool cancelKey = false;
+  if (keyDown) {
+    auto ks = M5Cardputer.Keyboard.keysState();
+    for (auto c : ks.word) if (c == '`') cancelKey = true;
+    cancelKey = cancelKey && uiMode == UI_MAP && !cmdMode;
+  }
+  const ScreenAction screenAct = screenSleepStep(&gScreen, millis(), keyDown, cancelKey);
+  if (screenAct == SCREEN_SLEEP) screenOff();
+  else if (screenAct == SCREEN_WAKE) { screenOn(); dirty = true; }
+
+  if (keyDown && screenAct == SCREEN_NONE) {
     lastInputMs = millis();
     auto st = M5Cardputer.Keyboard.keysState();
     for (auto c : st.word) handleChar(c);
@@ -2268,7 +2310,10 @@ void loop() {
     if (vectorMode && dirty && uiMode == UI_MAP) drawVectorPending();
   }
 
-  if (dirty) {
+  // Nothing is drawn while the backlight is off: a vector render costs one to
+  // two seconds and would be spent on a panel nobody can see. `dirty` stays
+  // set, so waking paints the current state once.
+  if (dirty && screenSleepAwake(&gScreen)) {
     // **Vector rendering takes 1-2 seconds,** so redrawing on every pan input would choke on itself.
     // It draws exactly once, 250ms after input goes quiet (raster is light, so it draws immediately)
     const bool defer = vectorMode && (millis() - lastInputMs < 250);
@@ -2304,12 +2349,12 @@ void loop() {
   static uint32_t lastStat = 0;
   if (millis() - lastStat > 3000) {
     lastStat = millis();
-    Serial.printf("[stat] boots=%u up=%us z=%d sd=%d net=%d drawn=%d failed=%d "
+    Serial.printf("[stat] boots=%u up=%us scr=%d z=%d sd=%d net=%d drawn=%d failed=%d "
                   "fromSd=%d fromNet=%d pwr=%d/%d/%d/%d/%d/%d/%d "
                   "heap=%u maxblock=%u tileBuf=%u gps=%u/%d/%d/%d "
                   "lat=%.5f lon=%.5f | %s | %s\n",
                   (unsigned)gBootCount, (unsigned)(millis() / 1000),
-                  zoom, (int)sdReady, (int)netReady, lastDrawn, lastFailed,
+                  (int)screenSleepAwake(&gScreen), zoom, (int)sdReady, (int)netReady, lastDrawn, lastFailed,
                   lastFromSd, lastFromNet,
                   pwrType, pwrLevel, pwrChg, pwrMv, (int)pwrUsb, pwrTr.trend, pwrSm.shown,
                   (unsigned)ESP.getFreeHeap(),
