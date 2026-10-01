@@ -16,15 +16,22 @@ fail=0
 for t in test/test_*.cpp; do
   name=$(basename "$t" .cpp)
   src="src/${name#test_}.cpp"
-  [ -f "$src" ] || { echo "SKIP $name (no matching $src)"; continue; }
+  # Header-only modules have no matching .cpp. Name them here rather than
+  # letting them be skipped silently -- a test that never runs is worse than
+  # no test, because the suite still says PASS.
+  case "$name" in
+    test_far_offsets) src="" ;;
+  esac
+  if [ -n "$src" ] && [ ! -f "$src" ]; then echo "SKIP $name (no matching $src)"; continue; fi
   # extra dependencies (tests that exercise another module)
   extra=""
   case "$name" in
     test_vtrender) extra="src/vtile.cpp" ;;
     test_pmtiles) extra="src/inflate.cpp" ;;
+    test_far_offsets) extra="src/pmtiles.cpp src/inflate.cpp" ;;
   esac
   echo "== $name"
-  g++ -std=c++17 -Wall -Wextra -Werror -O1 -o "$out/$name" "$t" "$src" $extra
+  g++ -std=c++17 -Wall -Wextra -Werror -O1 -o "$out/$name" "$t" $src $extra
   "$out/$name" || fail=1
 done
 exit $fail

@@ -15,6 +15,22 @@ namespace pmt {
 
 enum class Comp : uint8_t { Unknown = 0, None = 1, Gzip = 2 };
 
+// **The directory pass needs one 32 KiB window and cannot need less**: DEFLATE
+// back-references reach 32768 bytes, and this planet's leaf directories expand
+// to 75-97 KB, so the window is always in use. Allocating it per lookup fails
+// once the heap is in everyday shape -- measured on the device 2026-10-01 with
+// 62 KB free but a largest block of 31,732 bytes, i.e. 1036 bytes short. The
+// failure then arrived as "tile not found", which reads as "the map does not
+// have this place" rather than "the device could not look".
+//
+// So reserve it once, while the heap is still whole, and reuse it. Call this
+// early in setup(); a false return is worth saying out loud.
+bool reserveDirRing();
+
+// True when the last lookup failed for want of that window rather than because
+// the tile is absent. Cleared at the start of each locate().
+bool lastWasLowMemory();
+
 struct Header {
   uint64_t root_off = 0, root_len = 0;
   uint64_t leaf_off = 0, leaf_len = 0;

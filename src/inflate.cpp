@@ -1,8 +1,28 @@
 #include "inflate.h"
 
+#include <stdlib.h>
+
 // DEFLATE decoder. A version of the bulk decoder from cj-maplibre-embedded/lib/util, with the input/output abstracted
 // **to support streaming**. Huffman decoding is a naive bit-by-bit decode (doesn't consume memory).
 namespace inf {
+
+static uint8_t *g_window = nullptr;
+static bool g_busy = false;
+
+bool reserveWindow() {
+  if (!g_window) g_window = (uint8_t *)malloc(32768);
+  return g_window != nullptr;
+}
+
+uint8_t *acquireWindow() {
+  if (!g_window || g_busy) return nullptr;
+  g_busy = true;
+  return g_window;
+}
+
+void releaseWindow(uint8_t *w) {
+  if (w && w == g_window) g_busy = false;
+}
 namespace {
 
 constexpr int kBad = -1, kFull = -2, kTrunc = -3;

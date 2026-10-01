@@ -89,9 +89,9 @@ struct SdSource : ByteSource {
   ChunkedReader ch;
   bool open(const char *path) { return ch.open(path); }
   void close() { ch.close(); }
-  size_t size() const override { return (size_t)ch.size(); }
-  size_t read(size_t off, uint8_t *dst, size_t n) override {
-    return ch.read64((uint64_t)off, dst, (uint32_t)n);
+  uint64_t size() const override { return ch.size(); }
+  size_t read(uint64_t off, uint8_t *dst, size_t n) override {
+    return ch.read64(off, dst, (uint32_t)n);
   }
 };
 
@@ -122,11 +122,20 @@ struct SdRingOutput : inf::Output {
   bool ok;
   File &f; long wpos = 0;
   uint8_t wbuf[1024]; size_t wn = 0;
+  bool owned = false;
   explicit SdRingOutput(File &file) : f(file) {
-    ring = (uint8_t *)malloc(32768);          // safely holds the DEFLATE distance of 32768
+    // The same window the directory pass uses: a lookup is finished before its
+    // tile is decompressed, so they never want it at once. Reserving one each
+    // only moved the failure from the lookup to the tile.
+    ring = inf::acquireWindow();
+    owned = (ring == nullptr);
+    if (owned) ring = (uint8_t *)malloc(32768);   // safely holds the DEFLATE distance of 32768
     ok = ring != nullptr;
   }
-  ~SdRingOutput() { if (ring) free(ring); }
+  ~SdRingOutput() {
+    if (!ring) return;
+    if (owned) free(ring); else inf::releaseWindow(ring);
+  }
   void flush() { if (wn) { f.write(wbuf, wn); wn = 0; } }
   bool put(uint8_t b) override {
     ring[wpos & 0x7FFF] = b;

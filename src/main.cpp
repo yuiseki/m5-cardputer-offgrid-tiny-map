@@ -666,16 +666,30 @@ static bool ensureTileRaster(int z, int x, int y) {
   // **Decide the strip height based on free memory.** If the full 176x176 (~62KB) is available, do it in one strip (fast);
   // if fragmented, split into several (only cutting the memory needed, keeping quality at 176px). Right after `:wigle`, etc.,
   // lets generation succeed even with a 40KB maxblock (see findings/022). blit is a row stream, so this doesn't affect it.
-  const size_t big = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // The shared inflate window is free again by now -- the pbf finished
+  // decompressing above -- and 32 KiB is 93 rows of raster, so borrow it
+  // rather than asking a heap that no longer has a block this size. Reserving
+  // the window took the largest free block from 31,732 to 13,812 bytes, which
+  // is below VT_RING_MIN; without this, fixing the lookup would have traded a
+  // blank screen for a "low mem" one.
   const size_t fullNb = (size_t)VT_RASTER * VT_RASTER * 2;
+  uint8_t *shared = inf::acquireWindow();
   int stripH = VT_RASTER;
-  if (fullNb + 8192 > big) {
-    if (big < VT_RING_MIN) { gVtLowMem = true; return false; }   // Truly not enough
-    stripH = (int)((big - 8000) / (VT_RASTER * 2));
-    if (stripH < 8) stripH = 8;
+  uint16_t *rb = nullptr;
+  if (shared) {
+    stripH = (int)(32768 / (VT_RASTER * 2));                     // 93 rows
     if (stripH > VT_RASTER) stripH = VT_RASTER;
+    rb = (uint16_t *)shared;
+  } else {
+    const size_t big = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (fullNb + 8192 > big) {
+      if (big < VT_RING_MIN) { gVtLowMem = true; return false; }   // Truly not enough
+      stripH = (int)((big - 8000) / (VT_RASTER * 2));
+      if (stripH < 8) stripH = 8;
+      if (stripH > VT_RASTER) stripH = VT_RASTER;
+    }
+    rb = (uint16_t *)malloc((size_t)VT_RASTER * stripH * 2);
   }
-  uint16_t *rb = (uint16_t *)malloc((size_t)VT_RASTER * stripH * 2);
   if (!rb) { gVtLowMem = true; return false; }
 
   // Write to a temp name and rename, so a .565 truncated mid-write is never mistaken for "already generated"
@@ -704,7 +718,7 @@ static bool ensureTileRaster(int z, int x, int y) {
     if (haveSrc) src.close();
     f.close();
   }
-  free(rb);
+  if (shared) inf::releaseWindow(shared); else free(rb);
   if (!ok) { SD.remove(tp); return false; }
   SD.remove(rp); SD.rename(tp, rp);
   // Bake labels (.lbl) (place kept in tile-local coordinates)
@@ -1776,8 +1790,19 @@ static void handleCommand(const char *cmd) {
     if (!pm.open("/map.pmtiles")) { Serial.println("ok pmt: no /map.pmtiles"); return; }
     pmt::Archive arc(pm);
     if (!arc.open()) { Serial.println("ok pmt: bad header"); pm.close(); return; }
+    // What the device thinks it is holding. A split planet is 39 chunks and
+    // 77 GiB; anything else here is the actual problem, not the lookup.
+    Serial.printf("ok pmt: src chunks=%d total=%llu (%.2f GiB) zrange=%u..%u\n",
+                  pm.ch.nChunks, (unsigned long long)pm.ch.size(),
+                  (double)pm.ch.size() / 1073741824.0,
+                  arc.header().min_zoom, arc.header().max_zoom);
     uint64_t off; uint32_t len;
-    if (!arc.locate((uint8_t)z, x, y, off, len)) { Serial.println("ok pmt: tile not found"); pm.close(); return; }
+    if (!arc.locate((uint8_t)z, x, y, off, len)) {
+      // "could not look" and "nothing there" are different answers.
+      Serial.println(pmt::lastWasLowMemory() ? "ok pmt: out of memory for the directory window"
+                                             : "ok pmt: tile not found");
+      pm.close(); return;
+    }
     const uint32_t t0 = millis();
     // Stream-decompress the tile (gzip) to a temp file on SD (can't seek, so it's dropped to a file first).
     // **map.pmtiles is never opened twice** (a duplicate handle to the same file corrupts ESP32's SD implementation).
@@ -1787,7 +1812,7 @@ static void handleCommand(const char *cmd) {
     if (!tmp) { Serial.println("ok pmt: tmp open failed"); pm.close(); return; }
     SdRangeInput tin(pm.ch, off, len);
     SdRingOutput tout(tmp);
-    if (!tout.ok) { Serial.println("ok pmt: no 64KB for inflate"); tmp.close(); pm.close(); return; }
+    if (!tout.ok) { Serial.println("ok pmt: no 32KB window for inflate"); tmp.close(); pm.close(); return; }
     const long raw = inf::gunzip(tin, tout);
     tout.flush(); tmp.close(); pm.close();
     const uint32_t t_inf = millis() - t0;
@@ -2224,6 +2249,14 @@ void setup() {
     mapHost(srcActive, h, sizeof(h)); mapStyle(srcActive, st, sizeof(st));
     Serial.printf("[maps] active=%s %s tls=%d n=%d (sd=%d)\n",
                   h, st, (int)mapSrc[srcActive].tls, mapN, (int)sdReady);
+  }
+
+  // Reserve the directory window while the heap is still whole. After this
+  // point the largest free block settles around 31 KB, which is under the
+  // 32768 the window needs, and every offline lookup would fail.
+  {
+    const bool got = inf::reserveWindow();
+    Serial.printf("[pmt] inflate window %s\n", got ? "reserved (32KB, shared)" : "NOT RESERVED -- offline map will fail");
   }
 
   // **Imported from SD only when NVS is empty.** Overwriting every boot would revert on-device settings

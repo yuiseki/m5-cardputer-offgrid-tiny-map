@@ -11,6 +11,22 @@
 
 namespace inf {
 
+// **One 32 KiB window, reserved once and shared.**
+//
+// DEFLATE back-references reach 32768 bytes, so both the directory pass and
+// the tile output need a window that size, and neither can use less. They
+// never run at the same time -- a lookup finishes before its tile is
+// decompressed -- so one window serves both.
+//
+// Allocating per use does not work on the device. Measured 2026-10-01 with
+// everything else running: 62 KB free but a largest block of 31,732 bytes,
+// 1036 short. Reserving two 32 KB windows does not work either; that was the
+// same failure moved one step later. Reserve this at boot, while the heap is
+// still whole, and hand it out.
+bool reserveWindow();              // true once the window is held
+uint8_t *acquireWindow();          // the window, or nullptr if it is in use
+void releaseWindow(uint8_t *w);    // give it back (ignores a pointer we do not own)
+
 // Input: returns the next byte. -1 when exhausted
 struct Input {
   virtual ~Input() {}

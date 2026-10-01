@@ -14,15 +14,17 @@ uint64_t readU64(const uint8_t *p) {
 }
 
 // An inf::Input that sequentially reads [off,off+len) of a ByteSource (input for directory decompression).
-// Directory offsets only go up to the leaf area (<94MB), so size_t is enough.
+// Directories live near the front (the leaf area ends under 100MB), but the
+// offset still arrives as uint64_t from the header, and the same RangeInput is
+// used to read tile data, which does not. Keep it 64-bit end to end.
 struct RangeInput : inf::Input {
-  ByteSource &s; size_t pos, end;
+  ByteSource &s; uint64_t pos, end;
   uint8_t buf[256]; size_t bn = 0, bi = 0;
-  RangeInput(ByteSource &src, size_t off, size_t len) : s(src), pos(off), end(off + len) {}
+  RangeInput(ByteSource &src, uint64_t off, uint32_t len) : s(src), pos(off), end(off + (uint64_t)len) {}
   int get() override {
     if (bi >= bn) {
       if (pos >= end) return -1;
-      const size_t want = (end - pos < sizeof(buf)) ? (end - pos) : sizeof(buf);
+      const size_t want = (end - pos < (uint64_t)sizeof(buf)) ? (size_t)(end - pos) : sizeof(buf);
       bn = s.read(pos, buf, want); bi = 0; pos += bn;
       if (bn == 0) return -1;
     }
@@ -35,8 +37,11 @@ struct RangeInput : inf::Input {
 // at a time and feeding them into a state machine. Never holds the whole directory in RAM.
 // mode 1: gets match / run_length[match] / j / raw[j] (ids -> runs -> (skip lens) -> offs)
 // mode 2: gets Sigma length[j..match-1] and length[match] ((skip ids/runs) -> lens)
+// Whether a pass had to go without the shared window (see inf::reserveWindow).
+static bool g_lowMem = false;
+
 struct DirPass : inf::Output {
-  uint8_t *ring; bool ok;
+  uint8_t *ring; bool ok; bool owned;
   int mode; uint64_t tile_id;
   // varint reconstruction
   uint64_t acc = 0; int shift = 0; long wpos = 0;
@@ -49,8 +54,19 @@ struct DirPass : inf::Output {
   // mode2 input/output
   int64_t inMatch = 0, inJ = 0; uint64_t sumLen = 0, lenMatch = 0;
 
-  DirPass() { ring = (uint8_t *)malloc(32768); ok = ring != nullptr; }  // 32768 is enough for the DEFLATE distance
-  ~DirPass() { if (ring) free(ring); }
+  // Prefer the reserved window; fall back to a fresh one so a host build (and
+  // a device whose reservation failed) still works.
+  DirPass() {
+    ring = inf::acquireWindow();                 // the shared 32 KiB window
+    owned = (ring == nullptr);
+    if (owned) ring = (uint8_t *)malloc(32768);  // host builds, and devices without it
+    ok = ring != nullptr;
+    if (!ok) g_lowMem = true;
+  }
+  ~DirPass() {
+    if (!ring) return;
+    if (owned) free(ring); else inf::releaseWindow(ring);
+  }
 
   void onVarint(uint64_t v) {
     if (done) return;
@@ -101,7 +117,7 @@ struct DirPass : inf::Output {
 // Runs a pass while decompressing one directory
 bool runPass(ByteSource &src, uint64_t off, uint32_t clen, Comp comp, DirPass &pass) {
   if (!pass.ok) return false;
-  RangeInput in(src, (size_t)off, clen);
+  RangeInput in(src, off, clen);
   if (comp == Comp::Gzip) return inf::gunzip(in, pass) >= 0;
   int c;                                          // uncompressed: feed raw bytes directly
   while ((c = in.get()) >= 0) { pass.put((uint8_t)c); if (pass.done) break; }
@@ -175,6 +191,7 @@ bool Archive::open() {
 }
 
 bool Archive::locate(uint8_t z, uint32_t x, uint32_t y, uint64_t &offset, uint32_t &length) {
+  g_lowMem = false;                                   // this lookup's own verdict
   if (z < h_.min_zoom || z > h_.max_zoom) return false;
   const uint64_t tile_id = zxyToTileId(z, x, y);
   uint64_t dir_off = h_.root_off;
@@ -188,5 +205,9 @@ bool Archive::locate(uint8_t z, uint32_t x, uint32_t y, uint64_t &offset, uint32
   }
   return false;
 }
+
+bool reserveDirRing() { return inf::reserveWindow(); }
+
+bool lastWasLowMemory() { return g_lowMem; }
 
 }  // namespace pmt
